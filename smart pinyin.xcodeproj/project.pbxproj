@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A3EAEACB3012FB43009D7C49 /* InputMethodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A3EAEACA3012FB43009D7C49 /* InputMethodKit.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		A3EAEA1F3011F5B8009D7C49 /* smart pinyin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "smart pinyin.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3EAEACA3012FB43009D7C49 /* InputMethodKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = InputMethodKit.framework; path = System/Library/Frameworks/InputMethodKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +28,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A3EAEACB3012FB43009D7C49 /* InputMethodKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -33,6 +39,7 @@
 			isa = PBXGroup;
 			children = (
 				A3EAEA213011F5B8009D7C49 /* smart pinyin */,
+				A3EAEAC93012FB43009D7C49 /* Frameworks */,
 				A3EAEA203011F5B8009D7C49 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +50,14 @@
 				A3EAEA1F3011F5B8009D7C49 /* smart pinyin.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A3EAEAC93012FB43009D7C49 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A3EAEACA3012FB43009D7C49 /* InputMethodKit.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -259,13 +274,18 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "smart-pinyin-Info.plist";
+				INFOPLIST_KEY_LSBackgroundOnly = NO;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "jxcorp.smart-pinyin";
+				PRODUCT_BUNDLE_IDENTIFIER = "jxcorp.inputmethod.smart-pinyin";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -291,13 +311,18 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "smart-pinyin-Info.plist";
+				INFOPLIST_KEY_LSBackgroundOnly = NO;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "jxcorp.smart-pinyin";
+				PRODUCT_BUNDLE_IDENTIFIER = "jxcorp.inputmethod.smart-pinyin";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

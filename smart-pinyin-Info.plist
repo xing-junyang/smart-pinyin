@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>InputMethodConnectionName</key>
+	<string>LocalLLMIME_Connection</string>
+	<key>InputMethodServerControllerClass</key>
+	<string>LocalLLMIME.InputController</string>
+	<key>tsInputMethodIconFileKey</key>
+	<string>icon.tiff</string>
+</dict>
+</plist>
