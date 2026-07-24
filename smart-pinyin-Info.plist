@@ -3,10 +3,29 @@
 <plist version="1.0">
 <dict>
 	<key>InputMethodConnectionName</key>
-	<string>LocalLLMIME_Connection</string>
+	<string>SmartPinyin_Connection</string>
 	<key>InputMethodServerControllerClass</key>
-	<string>LocalLLMIME.InputController</string>
+	<string>$(PRODUCT_MODULE_NAME).InputController</string>
 	<key>tsInputMethodIconFileKey</key>
 	<string>icon.tiff</string>
+	<key>tkInputMethodIsOnIconKey</key>
+	<string>icon.tiff</string>
+	<key>TISInputSourceID</key>
+	<string>com.jxcorp.inputmethod.smart-pinyin</string>
+	<key>tsInputMethodCharacterRepertoireKey</key>
+	<array>
+		<string>Hans</string>
+		<string>Hant</string>
+		<string>Latn</string>
+	</array>
+	<key>LSBackgroundOnly</key>
+	<false/>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
