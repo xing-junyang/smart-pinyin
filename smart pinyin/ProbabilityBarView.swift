@@ -2,7 +2,8 @@
 //  ProbabilityBarView.swift
 //  smart pinyin
 //
-//  An NSView that draws a horizontal probability bar with a label.
+//  A row showing: [token text] ··· [numeric %] [probability bar ████░░].
+//  The bar always has a visible track so even low probabilities are readable.
 //
 
 import Cocoa
@@ -21,24 +22,28 @@ final class ProbabilityBarView: NSView {
         didSet { needsDisplay = true }
     }
 
-    // MARK: Colors
+    /// Width reserved for the bar + percentage on the right.
+    private let barAreaWidth: CGFloat = 120
+    private let barHeight: CGFloat = 14
+    private let textLeftPadding: CGFloat = 10
 
-    private let barGradientStart = NSColor(red: 0.2, green: 0.5, blue: 1.0, alpha: 1.0)
-    private let barGradientEnd   = NSColor(red: 0.1, green: 0.3, blue: 0.8, alpha: 1.0)
-    private let selectedBg       = NSColor.selectedControlColor
-    private let textColor        = NSColor.labelColor
-    private let selectedTextColor = NSColor.selectedControlTextColor
-    private let percentColor     = NSColor.secondaryLabelColor
+    // MARK: - Colors
+
+    private let barTrackColor   = NSColor.tertiaryLabelColor.withAlphaComponent(0.25)
+    private let barFillColor    = NSColor.systemBlue
+    private let textColor       = NSColor.labelColor
+    private let pctColor        = NSColor.secondaryLabelColor
+    private let selectedBg      = NSColor.selectedControlColor
+    private let selectedText    = NSColor.selectedControlTextColor
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 28)
+        NSSize(width: NSView.noIntrinsicMetric, height: 30)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let bounds = self.bounds
-        let inset: CGFloat = 4
 
-        // Background
+        // ---- Row background ----
         if isSelected {
             selectedBg.setFill()
             bounds.fill()
@@ -47,60 +52,71 @@ final class ProbabilityBarView: NSView {
             bounds.fill()
         }
 
-        let drawRect = bounds.insetBy(dx: inset, dy: 2)
+        let textColorToUse   = isSelected ? selectedText : textColor
+        let pctColorToUse    = isSelected ? selectedText.withAlphaComponent(0.8) : pctColor
+        let trackColorToUse  = isSelected
+            ? NSColor.white.withAlphaComponent(0.2)
+            : barTrackColor
+        let fillColorToUse   = isSelected
+            ? NSColor.white
+            : barFillColor
 
-        // ---- Probability bar ----
-        let barWidth = drawRect.width * CGFloat(probability)
-        let barRect = NSRect(x: drawRect.minX, y: drawRect.minY,
-                             width: barWidth, height: drawRect.height)
-
-        // Gradient bar
-        if let gradient = NSGradient(starting: barGradientStart, ending: barGradientEnd) {
-            gradient.draw(in: barRect, angle: 0)
-        } else {
-            barGradientStart.setFill()
-            barRect.fill()
-        }
-
-        // Bar rounded corners (clip)
-        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 4, yRadius: 4)
-        barPath.addClip()
-        barGradientStart.setFill()
-        barRect.fill()
-
-        // ---- Text ----
-        let textColorToUse = isSelected ? selectedTextColor : textColor
+        // ---- 1. Token text (left) ----
+        let textRightEdge = bounds.maxX - barAreaWidth - 8
+        let textRect = NSRect(
+            x: textLeftPadding,
+            y: 0,
+            width: textRightEdge - textLeftPadding,
+            height: bounds.height
+        )
         let paraStyle = NSMutableParagraphStyle()
         paraStyle.lineBreakMode = .byTruncatingTail
-
         let textAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13),
             .foregroundColor: textColorToUse,
             .paragraphStyle: paraStyle,
         ]
+        let textDrawRect = textRect.insetBy(dx: 0, dy: (textRect.height - 18) / 2)
+        (tokenText as NSString).draw(in: textDrawRect, withAttributes: textAttrs)
 
-        // Token text on the left
-        let textRect = NSRect(
-            x: drawRect.minX + 8,
-            y: drawRect.minY + 2,
-            width: drawRect.width * 0.55,
-            height: drawRect.height - 4
-        )
-        (tokenText as NSString).draw(in: textRect, withAttributes: textAttrs)
-
-        // Percentage on the right
-        let pctAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-            .foregroundColor: isSelected ? selectedTextColor.withAlphaComponent(0.8) : percentColor,
-        ]
+        // ---- 2. Percentage label ----
         let pctString = String(format: "%.1f%%", probability * 100)
+        let pctAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: pctColorToUse,
+        ]
         let pctSize = (pctString as NSString).size(withAttributes: pctAttrs)
+        let pctX = bounds.maxX - barAreaWidth + 2
         let pctRect = NSRect(
-            x: drawRect.maxX - pctSize.width - 8,
-            y: drawRect.minY + (drawRect.height - pctSize.height) / 2,
+            x: pctX,
+            y: bounds.height - pctSize.height - 3,
             width: pctSize.width,
             height: pctSize.height
         )
         (pctString as NSString).draw(in: pctRect, withAttributes: pctAttrs)
+
+        // ---- 3. Bar track (full width background) ----
+        let barY: CGFloat = 5
+        let barRect = NSRect(
+            x: pctX,
+            y: barY,
+            width: barAreaWidth - 4,
+            height: barHeight
+        )
+        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 3, yRadius: 3)
+        trackColorToUse.setFill()
+        barPath.fill()
+
+        // ---- 4. Bar fill (probability width, minimum 3pt) ----
+        let fillWidth = max(barRect.width * CGFloat(probability), 3)
+        let fillRect = NSRect(
+            x: barRect.minX,
+            y: barRect.minY,
+            width: fillWidth,
+            height: barRect.height
+        )
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 3, yRadius: 3)
+        fillColorToUse.setFill()
+        fillPath.fill()
     }
 }

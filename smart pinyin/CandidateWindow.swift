@@ -28,6 +28,29 @@ final class CandidateWindow: NSWindow {
         return tf
     }()
 
+    // MARK: - Loading UI
+
+    private let loadingLabel: NSTextField = {
+        let tf = NSTextField(labelWithString: "")
+        tf.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        tf.textColor = NSColor.labelColor
+        tf.alignment = .center
+        tf.lineBreakMode = .byTruncatingTail
+        return tf
+    }()
+
+    private let progressBar: NSProgressIndicator = {
+        let pi = NSProgressIndicator()
+        pi.style = .bar
+        pi.isIndeterminate = false
+        pi.minValue = 0
+        pi.maxValue = 100
+        pi.doubleValue = 0
+        pi.controlSize = .small
+        pi.translatesAutoresizingMaskIntoConstraints = false
+        return pi
+    }()
+
     private var barViews: [ProbabilityBarView] = []
     private var selectedIndex: Int = 0
 
@@ -76,9 +99,38 @@ final class CandidateWindow: NSWindow {
 
     // MARK: - Update
 
+    /// Whether we are currently showing the loading UI vs predictions.
+    private var isLoadingMode = false
+
+    func showLoading(modelName: String, progress: Double) {
+        clearContent()
+        isLoadingMode = true
+
+        loadingLabel.stringValue = "Loading \(modelName)..."
+        progressBar.doubleValue = progress * 100
+
+        stackView.addArrangedSubview(loadingLabel)
+        stackView.addArrangedSubview(progressBar)
+
+        NSLayoutConstraint.activate([
+            progressBar.widthAnchor.constraint(equalToConstant: 300),
+            progressBar.heightAnchor.constraint(equalToConstant: 12),
+        ])
+
+        contentView?.layout()
+        setContentSize(NSSize(width: 350, height: 60))
+    }
+
+    func hideLoading() {
+        guard isLoadingMode else { return }
+        isLoadingMode = false
+        clearContent()
+        setContentSize(NSSize(width: 0, height: 0))
+    }
+
     func updatePredictions(_ predictions: [TokenPrediction]) {
-        // Clear existing bars
-        stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        clearContent()
+        isLoadingMode = false
         barViews.removeAll()
         selectedIndex = 0
 
@@ -159,6 +211,10 @@ final class CandidateWindow: NSWindow {
     }
 
     // MARK: - Helper
+
+    private func clearContent() {
+        stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    }
 
     private func measuredFittingSize() -> NSSize {
         var height: CGFloat = 0

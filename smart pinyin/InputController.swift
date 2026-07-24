@@ -35,9 +35,42 @@ final class InputController: IMKInputController {
         committedText = ""
         compositionBuffer = ""
 
+        // Show loading window immediately
+        candidateWindow.showLoading(modelName: "model", progress: 0)
+        candidateWindow.position(near: NSPoint(x: NSScreen.main?.visibleFrame.midX ?? 400, y: 200),
+                                 on: NSScreen.main)
+        candidateWindow.orderFront(nil)
+
+        // Start model loading
         Task { @MainActor [weak self] in
-            await self?.predictor.loadModel()
-            NSLog("🟢 SmartPinyin model loaded")
+            guard let self else { return }
+            await self.predictor.loadModel()
+
+            // Poll state to update UI until loaded or error
+            var pollCount = 0
+            while true {
+                switch self.predictor.state {
+                case .loading(let progress):
+                    self.candidateWindow.showLoading(
+                        modelName: self.predictor.modelName,
+                        progress: progress
+                    )
+                case .loaded:
+                    self.candidateWindow.hideLoading()
+                    NSLog("🟢 SmartPinyin model loaded")
+                    return
+                case .error(let msg):
+                    self.candidateWindow.showLoading(modelName: "Error: \(msg)", progress: 0)
+                    // Keep error visible for 3 seconds then dismiss
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    self.candidateWindow.hideLoading()
+                    return
+                case .unloaded:
+                    break
+                }
+                pollCount += 1
+                try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms poll
+            }
         }
     }
 
@@ -49,6 +82,8 @@ final class InputController: IMKInputController {
         committedText = ""
         compositionBuffer = ""
         isComposing = false
+        lastKnownCursorPoint = nil
+        lastKnownScreen = nil
         super.deactivateServer(sender)
     }
 
@@ -269,13 +304,53 @@ final class InputController: IMKInputController {
         DispatchQueue.main.asyncAfter(deadline: .now() + predictionDebounce, execute: workItem)
     }
 
+    /// Cached last-known cursor position so the candidate window stays
+    /// near the text even when the client stops reporting coordinates.
+    private var lastKnownCursorPoint: NSPoint?
+    private var lastKnownScreen: NSScreen?
+
     private func showCandidateWindow() {
-        guard let screen = NSScreen.main else { return }
-        let screenRect = screen.visibleFrame
-        let point = NSPoint(
-            x: screenRect.midX - 175,
-            y: screenRect.minY + 120
-        )
+        guard let client = client() as? IMKTextInput,
+              let screen = NSScreen.main else { return }
+
+        var lineRect = NSRect.zero
+
+        // 1) Try the marked (composition) range — this is where the user is looking.
+        let marked = client.markedRange()
+        if marked.location != NSNotFound, marked.length > 0 {
+            _ = client.attributes(forCharacterIndex: marked.location,
+                                  lineHeightRectangle: &lineRect)
+        }
+
+        // 2) Fallback: insertion point.
+        if lineRect == .zero {
+            let sel = client.selectedRange()
+            let charIndex = max(sel.location, 0)
+            _ = client.attributes(forCharacterIndex: charIndex,
+                                  lineHeightRectangle: &lineRect)
+        }
+
+        // 3) Another fallback: try character index 0 (top of document).
+        if lineRect == .zero {
+            _ = client.attributes(forCharacterIndex: 0,
+                                  lineHeightRectangle: &lineRect)
+        }
+
+        // Compute anchor point.
+        let point: NSPoint
+        if lineRect != .zero {
+            // Show below the line, just past the left edge
+            point = NSPoint(x: lineRect.minX, y: lineRect.minY)
+            lastKnownCursorPoint = point
+            lastKnownScreen = screen
+        } else if let cached = lastKnownCursorPoint, let cachedScreen = lastKnownScreen {
+            // Reuse the last good position so the window doesn't jump away
+            point = cached
+        } else {
+            let screenRect = screen.visibleFrame
+            point = NSPoint(x: screenRect.midX - 175, y: screenRect.minY + 120)
+        }
+
         candidateWindow.position(near: point, on: screen)
         candidateWindow.orderFront(nil)
     }
