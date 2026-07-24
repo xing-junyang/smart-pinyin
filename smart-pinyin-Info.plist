@@ -5,7 +5,7 @@
 	<key>InputMethodConnectionName</key>
 	<string>SmartPinyin_Connection</string>
 	<key>InputMethodServerControllerClass</key>
-	<string>$(PRODUCT_MODULE_NAME).InputController</string>
+	<string>smart_pinyin.InputController</string>
 	<key>tsInputMethodIconFileKey</key>
 	<string>icon.tiff</string>
 	<key>tkInputMethodIsOnIconKey</key>
