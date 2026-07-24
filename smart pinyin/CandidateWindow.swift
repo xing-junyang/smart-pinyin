@@ -7,15 +7,41 @@
 
 import Cocoa
 
+// MARK: - Rounded Background View
+
+/// A view that draws itself as a rounded rectangle, used as the window backdrop.
+private final class RoundedBackdropView: NSView {
+    var fillColor: NSColor = NSColor.windowBackgroundColor.withAlphaComponent(0.97)
+    var borderColor: NSColor = NSColor.separatorColor
+    var cornerRadius: CGFloat = 12
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds, xRadius: cornerRadius, yRadius: cornerRadius)
+        fillColor.setFill()
+        path.fill()
+        borderColor.setStroke()
+        path.lineWidth = 0.5
+        path.stroke()
+    }
+}
+
+// MARK: - Candidate Window
+
 final class CandidateWindow: NSWindow {
 
     // MARK: - Subviews
+
+    private let backdrop: RoundedBackdropView = {
+        let v = RoundedBackdropView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
 
     private let stackView: NSStackView = {
         let sv = NSStackView()
         sv.orientation = .vertical
         sv.spacing = 2
-        sv.edgeInsets = NSEdgeInsets(top: 6, left: 4, bottom: 6, right: 4)
+        sv.edgeInsets = NSEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
         sv.translatesAutoresizingMaskIntoConstraints = false
         return sv
     }()
@@ -64,21 +90,13 @@ final class CandidateWindow: NSWindow {
             defer: false
         )
 
+        // Transparent window – the backdrop view draws the rounded rect.
         isOpaque = false
-        backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.95)
+        backgroundColor = .clear
         hasShadow = true
         level = .popUpMenu
         collectionBehavior = [.transient, .ignoresCycle]
         isReleasedWhenClosed = false
-
-        // Rounded corners
-        contentView?.wantsLayer = true
-        contentView?.layer?.cornerRadius = 10
-        contentView?.layer?.masksToBounds = true
-
-        // Border
-        contentView?.layer?.borderWidth = 0.5
-        contentView?.layer?.borderColor = NSColor.separatorColor.cgColor
 
         setupContentView()
     }
@@ -86,14 +104,24 @@ final class CandidateWindow: NSWindow {
     private func setupContentView() {
         guard let contentView = contentView else { return }
 
-        contentView.addSubview(stackView)
-
+        // Backdrop fills the window and clips subviews to rounded corners.
+        contentView.addSubview(backdrop)
         NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            stackView.widthAnchor.constraint(equalToConstant: 350),
+            backdrop.topAnchor.constraint(equalTo: contentView.topAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            backdrop.widthAnchor.constraint(equalToConstant: 350),
+        ])
+
+        // Stack sits inside the backdrop with a small inner margin.
+        backdrop.addSubview(stackView)
+        let inset = backdrop.cornerRadius / 2
+        NSLayoutConstraint.activate([
+            stackView.topAnchor.constraint(equalTo: backdrop.topAnchor, constant: inset),
+            stackView.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor, constant: inset),
+            stackView.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor, constant: -inset),
+            stackView.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor, constant: -inset),
         ])
     }
 
@@ -145,8 +173,6 @@ final class CandidateWindow: NSWindow {
             bar.tokenText = pred.text
             bar.probability = pred.probability
             bar.isSelected = (index == 0)
-            bar.wantsLayer = true
-            bar.layer?.cornerRadius = 4
             barViews.append(bar)
             stackView.addArrangedSubview(bar)
         }
@@ -221,8 +247,10 @@ final class CandidateWindow: NSWindow {
         for subview in stackView.arrangedSubviews {
             height += subview.intrinsicContentSize.height
         }
-        height += CGFloat(stackView.arrangedSubviews.count - 1) * stackView.spacing
+        height += CGFloat(max(stackView.arrangedSubviews.count - 1, 0)) * stackView.spacing
         height += stackView.edgeInsets.top + stackView.edgeInsets.bottom
+        // Account for the backdrop inset (cornerRadius / 2 on each side)
+        height += backdrop.cornerRadius
         return NSSize(width: 350, height: max(height, 0))
     }
 }
