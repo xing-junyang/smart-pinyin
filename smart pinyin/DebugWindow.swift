@@ -84,13 +84,13 @@ final class DebugWindow: NSWindow {
             stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            stackView.widthAnchor.constraint(equalToConstant: 420),
+            stackView.widthAnchor.constraint(equalToConstant: 520),
         ])
 
         // Start at bottom-right
         if let screen = NSScreen.main {
             let screenRect = screen.visibleFrame
-            let size = NSSize(width: 420, height: 210)
+            let size = NSSize(width: 520, height: 210)
             setContentSize(size)
             setFrameOrigin(NSPoint(
                 x: screenRect.maxX - size.width - 20,
@@ -112,16 +112,23 @@ final class DebugWindow: NSWindow {
     ) {
         stateLabel.stringValue = "State: \(state)"
         modelLabel.stringValue = "Model: \(model)"
-        contextLabel.stringValue = "Context: \(context.truncated(to: 80))"
+        // Show the last ~200 characters — tail matters most for prediction.
+        contextLabel.stringValue = "Context: \(context.tailTruncated(maxHead: 40, maxTail: 200))"
         tokensLabel.stringValue = "Tokens: \(tokens)"
         latencyLabel.stringValue = "Latency: \(latency)"
         pinyinLabel.stringValue = "Pinyin: \(pinyin)"
-        candidateLabel.stringValue = "Candidates: \(candidates.truncated(to: 60))"
+        candidateLabel.stringValue = "Candidates: \(candidates.tailTruncated(maxHead: 20, maxTail: 80))"
     }
 }
 
 private extension String {
-    func truncated(to maxLen: Int) -> String {
-        count > maxLen ? String(prefix(maxLen)) + "…" : self
+    /// If the string is short enough, return as-is.
+    /// Otherwise show `first maxHead` … `last maxTail` characters.
+    func tailTruncated(maxHead: Int, maxTail: Int) -> String {
+        let total = maxHead + 1 + maxTail  // +1 for "…"
+        guard count > total else { return self }
+        let head = prefix(maxHead)
+        let tail = suffix(maxTail)
+        return "\(head)…\(tail)"
     }
 }

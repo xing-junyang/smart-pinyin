@@ -108,6 +108,19 @@ final class InputController: IMKInputController {
         let chars = event.characters ?? ""
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
+        // ── Shortcuts (check before modifier filter) ──
+        if mods == [.control, .shift] {
+            switch keyCode {
+            case 0:   // Ctrl+Shift+A → add selected text to context
+                addSelectionToContext(client: client)
+                return true
+            case 7:   // Ctrl+Shift+X → clear context
+                clearContext(client: client)
+                return true
+            default: break
+            }
+        }
+
         if !mods.isEmpty, !mods.isSubset(of: [.shift, .capsLock, .numericPad, .function]) {
             return false
         }
@@ -295,6 +308,46 @@ final class InputController: IMKInputController {
         candidateWindow.orderOut(nil)
         triggerPrediction()
         refreshDebug()
+    }
+
+    // MARK: - Context Shortcuts
+
+    /// Ctrl+Shift+A — grab the currently selected text in the client app
+    /// and prepend it to the committed context so the LLM can use it.
+    private func addSelectionToContext(client: IMKTextInput) {
+        let sel = client.selectedRange()
+        guard sel.length > 0,
+              let selected = client.attributedSubstring(from: sel)?.string,
+              !selected.isEmpty else { return }
+
+        // Insert a separator then the selected text
+        committedText = committedText + " " + selected + " "
+        isComposing = false
+        compositionBuffer = ""
+        isPinyinMode = false
+        pinyinCandidates = []
+        candidateWindow.orderOut(nil)
+        refreshDebug()
+        NSLog("📎 Context added from selection: \(selected.prefix(50))…")
+    }
+
+    /// Ctrl+Shift+X — clear all accumulated context.
+    private func clearContext(client: IMKTextInput) {
+        committedText = ""
+        compositionBuffer = ""
+        isComposing = false
+        isPinyinMode = false
+        selectedChinese = ""
+        pinyinCandidates = []
+        lastKnownCursorPoint = nil
+        lastKnownScreen = nil
+        client.setMarkedText("", selectionRange: NSRange(), replacementRange: NSRange())
+        candidateWindow.orderOut(nil)
+        predictionWorkItem?.cancel()
+        predictionWorkItem = nil
+        predictor.resetContext()
+        refreshDebug()
+        NSLog("🧹 Context cleared")
     }
 
     // MARK: - Prediction
