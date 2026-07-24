@@ -2,8 +2,10 @@
 //  InputController.swift
 //  smart pinyin
 //
-//  macOS Input Method controller with LLM-powered next-token prediction.
-//  Handles key events, composition, candidate display, and prediction UI.
+//  macOS Input Method controller with:
+//  - Pinyin → Chinese character conversion
+//  - LLM-powered next-token prediction
+//  - Debug information window
 //
 
 import InputMethodKit
@@ -11,262 +13,288 @@ import Cocoa
 
 final class InputController: IMKInputController {
 
-    // MARK: - LLM Predictor
+    // MARK: - Core
 
     private let predictor = LLMPredictor()
     private let candidateWindow = CandidateWindow()
+    private let debugWindow = DebugWindow()
 
     // MARK: - Composition State
 
-    /// Current composition (raw) string – what the user is typing.
     private var compositionBuffer: String = ""
-
-    /// Committed text so far in the current session.
     private var committedText: String = ""
-
-    /// Whether we are in the middle of a composition.
     private var isComposing: Bool = false
 
-    // MARK: - IMKInputController Overrides
+    private var isPinyinMode: Bool = false
+    private var pinyinCandidates: [PinyinCandidate] = []
+    private var pinyinParsedSegments: [String] = []
+    private var selectedChinese: String = ""
+
+    // MARK: - Metrics
+
+    private var lastPredictionLatency: TimeInterval = 0
+    private var lastTokenCount: Int = 0
+
+    // MARK: - IMKInputController
 
     override func activateServer(_ sender: Any!) {
         NSLog("🟢 SmartPinyin activateServer")
         super.activateServer(sender)
-        committedText = ""
-        compositionBuffer = ""
+        resetState()
+        debugWindow.orderFront(nil)
+        refreshDebug()
 
-        // Show loading window immediately
         candidateWindow.showLoading(modelName: "model", progress: 0)
         candidateWindow.position(near: NSPoint(x: NSScreen.main?.visibleFrame.midX ?? 400, y: 200),
                                  on: NSScreen.main)
         candidateWindow.orderFront(nil)
 
-        // Start model loading
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.predictor.loadModel()
-
-            // Poll state to update UI until loaded or error
-            var pollCount = 0
             while true {
                 switch self.predictor.state {
-                case .loading(let progress):
-                    self.candidateWindow.showLoading(
-                        modelName: self.predictor.modelName,
-                        progress: progress
-                    )
+                case .loading(let p):
+                    self.candidateWindow.showLoading(modelName: self.predictor.modelName, progress: p)
+                    self.refreshDebug()
                 case .loaded:
                     self.candidateWindow.hideLoading()
-                    NSLog("🟢 SmartPinyin model loaded")
+                    self.refreshDebug()
                     return
-                case .error(let msg):
-                    self.candidateWindow.showLoading(modelName: "Error: \(msg)", progress: 0)
-                    // Keep error visible for 3 seconds then dismiss
+                case .error(let m):
+                    self.candidateWindow.showLoading(modelName: "Error: \(m)", progress: 0)
+                    self.refreshDebug()
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     self.candidateWindow.hideLoading()
                     return
-                case .unloaded:
-                    break
+                case .unloaded: break
                 }
-                pollCount += 1
-                try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms poll
+                try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }
     }
 
     override func deactivateServer(_ sender: Any!) {
-        NSLog("🔴 SmartPinyin deactivateServer")
         predictionWorkItem?.cancel()
         predictionWorkItem = nil
         candidateWindow.orderOut(nil)
+        debugWindow.orderOut(nil)
+        resetState()
+        super.deactivateServer(sender)
+    }
+
+    private func resetState() {
         committedText = ""
         compositionBuffer = ""
         isComposing = false
+        isPinyinMode = false
+        pinyinCandidates = []
+        pinyinParsedSegments = []
+        selectedChinese = ""
         lastKnownCursorPoint = nil
         lastKnownScreen = nil
-        super.deactivateServer(sender)
     }
 
     // MARK: - Event Handling
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        guard let event = event else {
-            return false
-        }
-
-        guard event.type == .keyDown else {
-            return false
-        }
-
+        guard let event = event, event.type == .keyDown else { return false }
         return handleKeyDown(event, client: sender)
     }
 
     private func handleKeyDown(_ event: NSEvent, client sender: Any!) -> Bool {
-        guard let client = sender as? IMKTextInput else {
-            NSLog("⚠️ handleKeyDown: sender is not IMKTextInput, type=\(type(of: sender))")
-            return false
-        }
-
+        guard let client = sender as? IMKTextInput else { return false }
         let keyCode = event.keyCode
-        let characters = event.characters ?? ""
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let chars = event.characters ?? ""
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-        // Pass through if Command, Control, or Option is held
-        if !modifiers.isEmpty
-            && !modifiers.isSubset(of: [.shift, .capsLock, .numericPad, .function])
-        {
+        if !mods.isEmpty, !mods.isSubset(of: [.shift, .capsLock, .numericPad, .function]) {
             return false
         }
 
-        // ---- Candidate window navigation (when visible) ----
-        if candidateWindow.isVisible {
+        // Candidate window nav (only when not loading)
+        if candidateWindow.isVisible, !candidateWindow.isShowingLoading {
             switch keyCode {
-            case 125:  // ↓
-                candidateWindow.moveDown(); return true
-            case 126:  // ↑
-                candidateWindow.moveUp(); return true
-            case 36:   // Return — accept selected prediction
-                candidateWindow.confirmSelection(); return true
-            case 53:   // Escape — dismiss
-                candidateWindow.orderOut(nil); return true
-            default:
-                // Not a nav key while window is visible — dismiss it, then process normally
-                candidateWindow.orderOut(nil)
+            case 125: candidateWindow.moveDown(); return true
+            case 126: candidateWindow.moveUp(); return true
+            case 36:  candidateWindow.confirmSelection(); return true
+            case 53:  candidateWindow.orderOut(nil); return true
+            default: break
             }
         }
 
-        // ---- Special keys ----
+        // Number keys 1-9 → select pinyin candidate
+        if isPinyinMode, !pinyinCandidates.isEmpty, let n = Int(chars), n >= 1, n <= 9 {
+            let idx = n - 1
+            if idx < pinyinCandidates.count {
+                selectPinyinCandidate(at: idx, client: client)
+                return true
+            }
+        }
+
+        // Special keys
         switch keyCode {
-        case 51:  // Delete / Backspace
-            return handleBackspace(client: client)
-
-        case 36:  // Return
-            return handleReturn(client: client)
-
-        case 49:  // Space
-            return handleSpace(client: client)
-
-        case 48:  // Tab — accept first prediction
+        case 51: return handleBackspace(client: client)
+        case 36: return handleReturn(client: client)
+        case 49: return handleSpace(client: client)
+        case 48:
             if let pred = predictor.predictions.first {
-                insertPrediction(pred, client: client)
-                return true
+                insertPrediction(pred, client: client); return true
             }
             return false
-
-        case 53:  // Escape — cancel composition
-            if isComposing {
-                cancelComposition(client: client)
-                return true
-            }
+        case 53:
+            if isComposing { cancelComposition(client: client); return true }
             return false
-
-        default:
-            break
+        default: break
         }
 
-        // ---- Printable characters ----
-        return handlePrintable(characters: characters, client: client)
+        return handlePrintable(chars: chars, client: client)
     }
 
     // MARK: - Key Handlers
 
     private func handleBackspace(client: IMKTextInput) -> Bool {
-        if isComposing && !compositionBuffer.isEmpty {
-            compositionBuffer.removeLast()
-            if compositionBuffer.isEmpty {
-                cancelComposition(client: client)
-            } else {
-                client.setMarkedText(
-                    compositionBuffer,
-                    selectionRange: NSRange(location: compositionBuffer.utf16.count, length: 0),
-                    replacementRange: NSRange(location: NSNotFound, length: 0)
-                )
-                triggerPrediction()
-            }
-            return true
+        guard isComposing, !compositionBuffer.isEmpty else { return false }
+        compositionBuffer.removeLast()
+        if compositionBuffer.isEmpty {
+            cancelComposition(client: client)
+        } else {
+            updateMarkedText(client: client)
+            parsePinyinIfNeeded()
+            refreshDebug()
         }
-        // Not composing: forward backspace to client
-        return forwardKeyEventToClient(client)
+        return true
     }
 
     private func handleReturn(client: IMKTextInput) -> Bool {
-        if isComposing {
-            commitComposition(client: client)
-            return true
-        }
+        if isComposing { commitComposition(client: client); return true }
         return false
     }
 
     private func handleSpace(client: IMKTextInput) -> Bool {
-        if isComposing {
-            commitComposition(client: client)
+        if isPinyinMode, !pinyinCandidates.isEmpty {
+            selectPinyinCandidate(at: 0, client: client)
+            return true
         }
+        if isComposing { commitComposition(client: client) }
         client.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
         committedText += " "
         triggerPrediction()
+        refreshDebug()
         return true
     }
 
-    private func handlePrintable(characters: String, client: IMKTextInput) -> Bool {
-        // Filter: keep only letters, numbers, punctuation, spaces
-        let filtered = characters.filter { ch in
-            if ch.isASCII {
-                return ch.isLetter || ch.isNumber || ch.isPunctuation || ch == " " || ch == "\t"
-            }
-            return true  // Non-ASCII (CJK, etc.) — always keep
+    private func handlePrintable(chars: String, client: IMKTextInput) -> Bool {
+        let filtered = chars.filter { ch in
+            if ch.isASCII { return ch.isLetter || ch.isNumber || ch.isPunctuation || ch == " " || ch == "\t" }
+            return true
         }
-
-        guard !filtered.isEmpty else {
-            return false
-        }
+        guard !filtered.isEmpty else { return false }
 
         if !isComposing {
             isComposing = true
             compositionBuffer = ""
+            selectedChinese = ""
         }
-
         compositionBuffer += filtered
-        client.setMarkedText(
-            compositionBuffer,
-            selectionRange: NSRange(location: compositionBuffer.utf16.count, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
-        )
+
+        let hasNonPinyin = compositionBuffer.contains { ch in
+            ch.isASCII && (!ch.isLowercase || (!ch.isLetter && ch != "'"))
+        }
+        isPinyinMode = !hasNonPinyin
+
+        parsePinyinIfNeeded()
+        updateMarkedText(client: client)
         triggerPrediction()
+        refreshDebug()
         return true
+    }
+
+    // MARK: - Pinyin
+
+    private func parsePinyinIfNeeded() {
+        guard isPinyinMode else { pinyinCandidates = []; return }
+        pinyinParsedSegments = PinyinEngine.segment(compositionBuffer)
+        if let last = pinyinParsedSegments.last {
+            pinyinCandidates = PinyinEngine.candidates(for: last)
+        } else {
+            pinyinCandidates = []
+        }
+        if !pinyinCandidates.isEmpty {
+            candidateWindow.showPinyinCandidates(pinyinCandidates, context: compositionBuffer)
+            candidateWindow.onSelectPinyin = { [weak self] idx in
+                guard let self, let c = self.client() as? IMKTextInput else { return }
+                self.selectPinyinCandidate(at: idx, client: c)
+            }
+        }
+    }
+
+    private func selectPinyinCandidate(at idx: Int, client: IMKTextInput) {
+        guard idx < pinyinCandidates.count else { return }
+        selectedChinese += pinyinCandidates[idx].character
+        if let last = pinyinParsedSegments.last, compositionBuffer.hasSuffix(last) {
+            compositionBuffer = String(compositionBuffer.dropLast(last.count))
+        }
+        if compositionBuffer.isEmpty {
+            commitPinyinResult(client: client)
+        } else {
+            parsePinyinIfNeeded()
+            updateMarkedText(client: client)
+            refreshDebug()
+        }
+    }
+
+    private func commitPinyinResult(client: IMKTextInput) {
+        guard !selectedChinese.isEmpty else { return }
+        client.insertText(selectedChinese, replacementRange: NSRange(location: NSNotFound, length: 0))
+        committedText += selectedChinese
+        compositionBuffer = ""
+        selectedChinese = ""
+        isComposing = false
+        isPinyinMode = false
+        pinyinCandidates = []
+        candidateWindow.orderOut(nil)
+        triggerPrediction()
+        refreshDebug()
+    }
+
+    // MARK: - Marked Text
+
+    private func updateMarkedText(client: IMKTextInput) {
+        let display = (isPinyinMode && !selectedChinese.isEmpty)
+            ? selectedChinese + compositionBuffer : compositionBuffer
+        client.setMarkedText(display,
+            selectionRange: NSRange(location: display.utf16.count, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 
     // MARK: - Composition
 
     private func cancelComposition(client: IMKTextInput) {
-        isComposing = false
-        compositionBuffer = ""
+        isComposing = false; isPinyinMode = false
+        compositionBuffer = ""; selectedChinese = ""; pinyinCandidates = []
         client.setMarkedText("", selectionRange: NSRange(), replacementRange: NSRange())
         candidateWindow.orderOut(nil)
+        refreshDebug()
     }
 
     private func commitComposition(client: IMKTextInput) {
+        if isPinyinMode, !selectedChinese.isEmpty { commitPinyinResult(client: client); return }
         guard !compositionBuffer.isEmpty else { return }
-        let text = compositionBuffer
-        client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
-        committedText += text
-        compositionBuffer = ""
-        isComposing = false
+        client.insertText(compositionBuffer, replacementRange: NSRange(location: NSNotFound, length: 0))
+        committedText += compositionBuffer
+        compositionBuffer = ""; isComposing = false; isPinyinMode = false; pinyinCandidates = []
         candidateWindow.orderOut(nil)
+        refreshDebug()
     }
 
-    private func insertPrediction(_ prediction: TokenPrediction, client: IMKTextInput) {
-        if isComposing {
-            commitComposition(client: client)
-        }
-        client.insertText(prediction.text, replacementRange: NSRange(location: NSNotFound, length: 0))
-        committedText += prediction.text
+    private func insertPrediction(_ p: TokenPrediction, client: IMKTextInput) {
+        if isComposing { commitComposition(client: client) }
+        client.insertText(p.text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        committedText += p.text
         candidateWindow.orderOut(nil)
         triggerPrediction()
-    }
-
-    private func forwardKeyEventToClient(_ client: IMKTextInput) -> Bool {
-        // Let the system handle the event for the client
-        return false
+        refreshDebug()
     }
 
     // MARK: - Prediction
@@ -276,27 +304,28 @@ final class InputController: IMKInputController {
 
     private func triggerPrediction() {
         predictionWorkItem?.cancel()
-
-        let context = committedText + compositionBuffer
-        guard !context.isEmpty else {
-            candidateWindow.orderOut(nil)
-            return
-        }
-
+        let ctx = committedText + compositionBuffer
+        guard !ctx.isEmpty else { candidateWindow.orderOut(nil); refreshDebug(); return }
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            let start = Date()
             Task { @MainActor in
-                await self.predictor.predict(nextTo: context)
-                if self.predictor.predictions.isEmpty {
-                    self.candidateWindow.orderOut(nil)
-                } else {
-                    self.candidateWindow.updatePredictionsWithStorage(self.predictor.predictions)
-                    self.candidateWindow.onSelect = { [weak self] pred in
-                        guard let self,
-                              let client = self.client() as? IMKTextInput else { return }
-                        self.insertPrediction(pred, client: client)
+                await self.predictor.predict(nextTo: ctx)
+                self.lastPredictionLatency = Date().timeIntervalSince(start) * 1000
+                self.lastTokenCount = self.predictor.predictions.count
+                self.refreshDebug()
+                let showingPinyin = self.isPinyinMode && !self.pinyinCandidates.isEmpty
+                if !showingPinyin {
+                    if self.predictor.predictions.isEmpty {
+                        self.candidateWindow.orderOut(nil)
+                    } else {
+                        self.candidateWindow.updatePredictionsWithStorage(self.predictor.predictions)
+                        self.candidateWindow.onSelect = { [weak self] pred in
+                            guard let self, let c = self.client() as? IMKTextInput else { return }
+                            self.insertPrediction(pred, client: c)
+                        }
+                        self.showCandidateWindow()
                     }
-                    self.showCandidateWindow()
                 }
             }
         }
@@ -304,72 +333,66 @@ final class InputController: IMKInputController {
         DispatchQueue.main.asyncAfter(deadline: .now() + predictionDebounce, execute: workItem)
     }
 
-    /// Cached last-known cursor position so the candidate window stays
-    /// near the text even when the client stops reporting coordinates.
     private var lastKnownCursorPoint: NSPoint?
     private var lastKnownScreen: NSScreen?
 
     private func showCandidateWindow() {
-        guard let client = client() as? IMKTextInput,
-              let screen = NSScreen.main else { return }
-
+        guard let client = client() as? IMKTextInput, let screen = NSScreen.main else { return }
         var lineRect = NSRect.zero
-
-        // 1) Try the marked (composition) range — this is where the user is looking.
         let marked = client.markedRange()
         if marked.location != NSNotFound, marked.length > 0 {
-            _ = client.attributes(forCharacterIndex: marked.location,
-                                  lineHeightRectangle: &lineRect)
+            _ = client.attributes(forCharacterIndex: marked.location, lineHeightRectangle: &lineRect)
         }
-
-        // 2) Fallback: insertion point.
         if lineRect == .zero {
-            let sel = client.selectedRange()
-            let charIndex = max(sel.location, 0)
-            _ = client.attributes(forCharacterIndex: charIndex,
+            _ = client.attributes(forCharacterIndex: max(client.selectedRange().location, 0),
                                   lineHeightRectangle: &lineRect)
         }
-
-        // 3) Another fallback: try character index 0 (top of document).
         if lineRect == .zero {
-            _ = client.attributes(forCharacterIndex: 0,
-                                  lineHeightRectangle: &lineRect)
+            _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &lineRect)
         }
-
-        // Compute anchor point.
         let point: NSPoint
         if lineRect != .zero {
-            // Show below the line, just past the left edge
             point = NSPoint(x: lineRect.minX, y: lineRect.minY)
-            lastKnownCursorPoint = point
-            lastKnownScreen = screen
-        } else if let cached = lastKnownCursorPoint, let cachedScreen = lastKnownScreen {
-            // Reuse the last good position so the window doesn't jump away
-            point = cached
+            lastKnownCursorPoint = point; lastKnownScreen = screen
+        } else if let c = lastKnownCursorPoint, let s = lastKnownScreen {
+            point = c
         } else {
-            let screenRect = screen.visibleFrame
-            point = NSPoint(x: screenRect.midX - 175, y: screenRect.minY + 120)
+            point = NSPoint(x: screen.visibleFrame.midX - 175, y: screen.visibleFrame.minY + 120)
         }
-
         candidateWindow.position(near: point, on: screen)
         candidateWindow.orderFront(nil)
     }
 
-    // MARK: - Candidate Support
+    // MARK: - Debug
 
-    override func candidates(_ sender: Any!) -> [Any]! {
-        return predictor.predictions.map(\.text)
-    }
-
-    override func candidateSelected(_ candidateString: NSAttributedString!) {
-        guard let client = client() as? IMKTextInput,
-              let text = candidateString?.string else { return }
-        insertPrediction(
-            TokenPrediction(text: text, probability: 0, tokenID: 0),
-            client: client
+    private func refreshDebug() {
+        let st: String = {
+            switch predictor.state {
+            case .unloaded: return "unloaded"
+            case .loading(let p): return "loading \(Int(p*100))%"
+            case .loaded: return "loaded"
+            case .error(let m): return "error: \(m)"
+            }
+        }()
+        let ctx = committedText + compositionBuffer
+        let py = isPinyinMode
+            ? "\(compositionBuffer) → \(pinyinParsedSegments.joined(separator: " "))"
+            : "none"
+        debugWindow.update(
+            state: st, model: predictor.modelName, context: ctx,
+            tokens: "\(lastTokenCount)",
+            latency: String(format: "%.0f ms", lastPredictionLatency),
+            pinyin: py,
+            candidates: pinyinCandidates.prefix(5).map(\.character).joined()
         )
     }
 
-    override func candidateSelectionChanged(_ candidateString: NSAttributedString!) {}
-}
+    // MARK: - System Candidate Support
 
+    override func candidates(_ sender: Any!) -> [Any]! { predictor.predictions.map(\.text) }
+    override func candidateSelected(_ s: NSAttributedString!) {
+        guard let c = client() as? IMKTextInput, let t = s?.string else { return }
+        insertPrediction(TokenPrediction(text: t, probability: 0, tokenID: 0), client: c)
+    }
+    override func candidateSelectionChanged(_ s: NSAttributedString!) {}
+}

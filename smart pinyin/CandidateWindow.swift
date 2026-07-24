@@ -129,6 +129,7 @@ final class CandidateWindow: NSWindow {
 
     /// Whether we are currently showing the loading UI vs predictions.
     private var isLoadingMode = false
+    var isShowingLoading: Bool { isLoadingMode }
 
     func showLoading(modelName: String, progress: Double) {
         clearContent()
@@ -184,6 +185,7 @@ final class CandidateWindow: NSWindow {
     }
 
     var onSelect: ((TokenPrediction) -> Void)?
+    var onSelectPinyin: ((Int) -> Void)?
 
     func moveUp() {
         guard !barViews.isEmpty else { return }
@@ -200,18 +202,51 @@ final class CandidateWindow: NSWindow {
     }
 
     func confirmSelection() {
-        guard !storedPredictions.isEmpty, selectedIndex < storedPredictions.count else {
-            return
+        if !storedPredictions.isEmpty, selectedIndex < storedPredictions.count {
+            onSelect?(storedPredictions[selectedIndex])
+        } else if !storedPinyinCandidates.isEmpty, selectedIndex < storedPinyinCandidates.count {
+            onSelectPinyin?(selectedIndex)
         }
-        onSelect?(storedPredictions[selectedIndex])
     }
 
     // We store predictions separately for selection lookup
     private var storedPredictions: [TokenPrediction] = []
+    private var storedPinyinCandidates: [PinyinCandidate] = []
 
     func updatePredictionsWithStorage(_ predictions: [TokenPrediction]) {
         storedPredictions = predictions
+        storedPinyinCandidates = []
         updatePredictions(predictions)
+    }
+
+    // MARK: - Pinyin Candidates
+
+    /// Show pinyin candidates (Chinese characters) with their pinyin labels.
+    func showPinyinCandidates(_ candidates: [PinyinCandidate], context: String) {
+        clearContent()
+        isLoadingMode = false
+        barViews.removeAll()
+        storedPinyinCandidates = candidates
+        storedPredictions = []
+
+        // Header
+        let header = NSTextField(labelWithString: "Pinyin: \(context)")
+        header.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        header.textColor = NSColor.secondaryLabelColor
+        stackView.addArrangedSubview(header)
+
+        // Candidate buttons
+        for (i, cand) in candidates.enumerated() {
+            let bar = ProbabilityBarView()
+            bar.tokenText = "\(i + 1). \(cand.character)  [\(cand.pinyin)]"
+            bar.probability = 1.0 - Float(i) * 0.05
+            bar.isSelected = (i == 0)
+            barViews.append(bar)
+            stackView.addArrangedSubview(bar)
+        }
+
+        contentView?.layout()
+        setContentSize(NSSize(width: 280, height: CGFloat(28 + candidates.count * 30 + 20)))
     }
 
     // MARK: - Positioning
